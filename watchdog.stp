@@ -1,0 +1,36 @@
+// written by Luccas Oakley
+// 18 February 2025
+// Compile the systemtap driver with 
+//    stap -v -g -p 4 -m lo_watchdog_v001.ko watchdog.stp 
+// Run it with
+//    staprun lo_watchdog_v01.ko > /var/log/watchdog_log.txt & 
+//
+// After an event, look at file /var/log/watchdog_log.txt for the culprit
+
+function output(msg) {
+	printk(1, msg);
+	printf("%s", msg);
+}
+
+probe begin { 
+    output("Starting SystemTap watching /dev/watchdog | Lucas Oakley v0.1\n");
+}
+
+probe end { 
+	output("Ending SystemTap watching /dev/watchdog | Lucas Oakley\n");
+}
+
+probe kernel.function("watchdog_release") {
+	output(sprintf("LO-STAP: %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+
+	// print_backtrace();
+	output(sprint_backtrace());
+
+	pid_hierarchy = sprintf("LO-STAP: -> PID hierarchy: %ld ('%s')\n", pid(), execname());
+	caller_task_struct = task_current();
+	while ((caller_task_struct->pid != 1) && (caller_task_struct->pid != 0)) {
+		caller_task_struct = caller_task_struct->parent;
+		pid_hierarchy .= sprintf("%ld ('%s')\n", caller_task_struct->pid, pid2execname(caller_task_struct->pid));
+	}           
+    output(pid_hierarchy);
+}
