@@ -1,0 +1,135 @@
+#!/bin/bash
+#
+# Lucas Oakley 12 June 2025
+# This is to catch what is touching a watchdog appropriately, but unexpectedly.
+# This sets data probes on the watchdog device timestamps and probes a few routines
+# then will write out to a file /var/stap-$(date.....).... what has been interacting
+# with the watchdog.
+# Writes outout to  /var/stap-$(hostname)-$(date | sed -e 's/ /-/g').txt
+
+# Used on 5.14.0-427.13.1.el9_4.x86_64 or other el9_4 kernels.
+
+# run like this:
+#     # ./probe1.stp ; ./probe2.stp
+#
+
+
+# check of probe1 wrote out the addresses for our data probes.
+if ! test -f stap-wdd-addresses; then
+   printf "Missing stap-wdd-address. Need to run  probe1.stp first\n\n\n"
+   exit
+fi
+
+# read in addresses for the data probes from probe1
+. <(/usr/bin/cat stap-wdd-addresses)
+
+# get rid of old symbol data for subsequent runs
+rm stap-wdd-addresses
+
+# exec stap -v --vp 44444 -g --all-modules --suppress-time-limits -  << EOF
+exec stap -v -g -o /var/stap-$(hostname)-$(date | sed -e 's/ /-/g').txt --all-modules --suppress-time-limits -  << EOF
+
+function output(msg) {
+    // printk(1, msg);   << writing this data to the serial console may overwhelm the serial console and cause hard lockups.
+    printf("%s", msg);
+}
+
+global get_wdd;
+global wwd_status;
+
+// Safer than written in direct C
+function datadump() {
+    output(sprint_backtrace());
+    pid_hierarchy = sprintf("LO-STAP: -> PID hierarchy: %ld ('%s')\n", pid(), execname());
+    caller_task_struct = task_current();
+    while ((caller_task_struct->pid != 1) && (caller_task_struct->pid != 0)) {
+        caller_task_struct = caller_task_struct->parent;
+        pid_hierarchy .= sprintf("%ld ('%s')\n", caller_task_struct->pid, pid2execname(caller_task_struct->pid));
+    }   
+    output(pid_hierarchy);
+}
+
+
+probe begin {
+    output("Starting SystemTap watching /dev/watchdog | Lucas Oakley v0.3\n");
+}
+
+
+probe end {
+    output("Ending SystemTap watching /dev/watchdog | Lucas Oakley\n");
+}
+
+
+probe kernel.function("watchdog_ioctl") {
+    output(sprintf("LO-STAP: watchdog_ioctl %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    output(sprintf("LO-STAP: watchdog_ioctl ARGS:    RDI: 0x%lx    RSI: 0x%lx    RDX: 0x%lx\n", register("rdi"), register("rsi"), register("rdx")));
+    datadump();
+}
+
+
+
+
+probe kernel.function("watchdog_release"),
+      kernel.function("watchdog_open"),
+      kernel.function("watchdog_write"),
+      kernel.function("watchdog_ping"),
+      kernel.function("__watchdog_ping"),
+      kernel.function("watchdog_ping_work"),
+      kernel.function("watchdog_timer_expired") {
+
+    output(sprintf("LO-STAP: %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    datadump();
+}
+
+
+probe kernel.function("watchdog_worker_should_ping").return {
+    output(sprintf("LO-STAP: watchdog_worker_should_ping %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    output(sprintf("LO-STAP: watchdog_worker_should_ping: RET: 0x%lx\n", \$return));
+    datadump();
+}
+
+probe kernel.function("watchdog_past_open_deadline") {
+    output(sprintf("LO-STAP: watchdog_past_open_deadline %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    datadump();
+}
+
+probe kernel.function("watchdog_set_open_deadline") {
+    output(sprintf("LO-STAP: watchdog_set_open_deadline %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    datadump();
+}
+
+probe kernel.function("watchdog_next_keepalive") {
+    output(sprintf("LO-STAP: watchdog_next_keepalive %d %s(%d) %s -> %s\n", gettimeofday_ms(), task_execname(task_current()), pid(), probemod(), probefunc()));
+    datadump();
+}
+
+
+
+
+
+
+// x86_64 has 4 debug registers, so we can only set 4 data probes. ppc64le has only 1.
+
+probe kernel.data($old_wd_data_status).rw {
+	output(sprintf("LO-STAP: old_wd_data_status status change: 0x%lx\n", atomic_long_read($old_wd_data_status))); 
+	datadump();
+}
+
+probe kernel.data($wdd_status).rw {
+        output(sprintf("LO-STAP: wdd_status status change: 0x%lx\n", atomic_long_read($wdd_status)));
+	datadump();
+}
+
+probe kernel.data($old_wd_data_last_keepalive).rw {
+        output(sprintf("LO-STAP: old_wd_data_last_keepalive change: 0x%lx\n", atomic_long_read($old_wd_data_last_keepalive)));
+        datadump();
+}
+
+probe kernel.data($old_wd_data_last_hw_keepalive).rw {
+        output(sprintf("LO-STAP: old_wd_data_last_hw_keepalive change: 0x%lx\n", atomic_long_read($old_wd_data_last_hw_keepalive)));
+        datadump();
+}
+
+
+
+EOF
