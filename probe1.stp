@@ -1,0 +1,60 @@
+#!/bin/bash
+
+#
+# Lucas Oakley 12 June 2025
+# This is probe1 which finds the watchdog device structure and the offsets of it's
+# last* touched timestamps. Probe2 will use these addresses to set data probes on
+# those addresses.
+#
+# This is to catch what is touching a watchdog appropriately, but unexpectedly.
+# This sets data probes on the watchdog device timestamps and probes a few routines
+# then will write out to a file /var/stap-$(date.....).... what has been interacting
+# with the watchdog.
+
+# run like this:
+#     # ./probe1.stp ; ./probe2.stp
+#
+
+# Used on kernel-5.14.0-427.13.1.el9_4.x86_64
+
+# get symbol addr for old_wd_data.
+# For whatever reason, I could not get @var(...) to find this symbol.
+. <(/usr/bin/awk -e '$3~/^old_wd_data$/{print $3 "=0x" $1}' /proc/kallsyms)
+
+old_wd_data=$(($old_wd_data+0))
+
+printf "old_wd_data address = 0x%lx\n" $old_wd_data 
+
+# crash> watchdog_core_data -o
+# struct watchdog_core_data {
+#     [0x0] struct device dev;
+#   [0x300] struct cdev cdev;
+#   [0x368] struct watchdog_device *wdd;
+#   [0x370] struct mutex lock;
+#   [0x390] ktime_t last_keepalive;
+#   [0x398] ktime_t last_hw_keepalive;
+#   [0x3a0] ktime_t open_deadline;
+#   [0x3a8] struct hrtimer timer;
+#   [0x3f8] struct kthread_work work;
+#   [0x420] unsigned long status;
+# }
+# SIZE: 0x428
+
+# write our the targeted addresses to a file for probe2 to read.
+exec stap -o stap-wdd-addresses - << EOF
+
+probe begin { 
+	// get structure address from the symbol. Then associated addrs for status
+	t_old = atomic_long_read($old_wd_data); 
+        printf("old_wd_data=0x%0lx\n",t_old);
+	t_old_status=t_old+0x420;
+	printf("old_wd_data_status=0x%0lx\n",t_old_status);
+	printf("old_wd_data_last_keepalive=0x%0lx\n",(t_old+0x390));
+	printf("old_wd_data_last_hw_keepalive=0x%0lx\n",(t_old+0x398));
+	printf("old_wd_data_open_deadline=0x%0lx\n",(t_old+0x3a0));
+	t_wdd = atomic_long_read(t_old+0x368);
+	printf("wdd=0x%lx\n",t_wdd);
+	printf("wdd_status=0x%lx\n",t_wdd+0xa8);
+        exit()
+}
+EOF
