@@ -6,4 +6,6 @@ In some environments or situations where it not clear which program is interacti
 it can be hard to find which tasks are opening and closing the watchdog appropriately. 
 
 Running `./probe1.stp ; ./probe2.stp` will show this and be very verbose about which tasks are opening 
-or closing the file, or even adjusting the status in the kernel's watchdog device structure!.
+or closing the file, or even adjusting the status in the kernel's watchdog device structure!, writing 
+out to /var/stap-$(date ....).txt. Warning the file might get large so ensure that /var/ has gree
+GB worth of space.
